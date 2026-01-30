@@ -96,6 +96,38 @@ export async function getDiscussionPosts(discussionId: number) {
   return data.posts?.posts ?? data.posts ?? [];
 }
 
+export async function loginWithGoogle(idToken: string) {
+  try {
+    const { data } = await api.post("/auth/google", { idToken });
+    return data;
+  } catch (error: any) {
+    return {
+      ok: false,
+      error: error.response?.data?.error || "Error en autenticación con Google",
+    };
+  }
+}
+
+export async function linkGoogleMoodle(
+  idToken: string,
+  username: string,
+  password: string,
+) {
+  try {
+    const { data } = await api.post("/auth/link-google-moodle", {
+      idToken,
+      username,
+      password,
+    });
+    return data;
+  } catch (error: any) {
+    return {
+      ok: false,
+      error: error.response?.data?.error || "Error vinculando cuentas",
+    };
+  }
+}
+
 export async function replyToPost(
   postid: number,
   subject: string,

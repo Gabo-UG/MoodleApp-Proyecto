@@ -1,7 +1,6 @@
 //index.tsx
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import axios from "axios";
-import * as Linking from "expo-linking";
+import * as Google from "expo-auth-session/providers/google";
 import { useRouter } from "expo-router";
 import * as WebBrowser from "expo-web-browser";
 import React, { useEffect, useState } from "react";
@@ -14,33 +13,19 @@ import {
   useColorScheme,
 } from "react-native";
 
-// Componentes tuyos
 import { HelloWave } from "@/components/hello-wave";
 import { ThemedText } from "@/components/themed-text";
 import { ThemedView } from "@/components/themed-view";
-
-// --- CONFIGURACIÓN ---
-
-// 1. BACKEND NODE (Para usuario/contraseña normal)
-// Tu backend corre en el puerto 3000
-const BACKEND_URL = "http://192.168.100.36:3000";
-
-// 2. MOODLE DIRECTO (Para Google)
-// Moodle suele correr en el puerto 80 (sin puerto) o en 8080.
-// const MOODLE_LAUNCH_URL =
-//   "http://192.168.100.36/moodle/admin/tool/mobile/launch.php?service=app_movil&passport=12345&urlscheme=moodleapp";
-// IMPORTANTE: service=app_movil (Este nombre debe coincidir con el servicio externo en Moodle)
-
-// const MOODLE_LAUNCH_URL =
-//   "http://192.168.100.36/moodle/admin/tool/mobile/launch.php?service=moodle_mobile_app&passport=12345&urlscheme=moodleapp";
-
-// Usamos TU servicio 'app_movil' que acabas de crear/verificar
-// Asegúrate de que diga: service=moodle_mobile_app
-
-const MOODLE_LAUNCH_URL =
-  "http://192.168.100.36/moodle/admin/tool/mobile/launch.php?service=moodle_mobile_app&passport=12345&urlscheme=moodleapp";
+import {
+  linkGoogleMoodle,
+  loginBackend,
+  loginWithGoogle,
+} from "@/services/moodle";
 
 WebBrowser.maybeCompleteAuthSession();
+
+const GOOGLE_WEB_CLIENT_ID =
+  "1022276104325-k1s713c9lvgnc571cftp2vo6ucvqpfsq.apps.googleusercontent.com";
 
 export default function LoginScreen() {
   const router = useRouter();
@@ -49,39 +34,26 @@ export default function LoginScreen() {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
+  const [googleIdToken, setGoogleIdToken] = useState<string | null>(null);
+  const [googleUser, setGoogleUser] = useState<any>(null);
+  const [showLinkForm, setShowLinkForm] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string>("");
 
-  // --- ESCUCHAR RETORNO DE GOOGLE ---
+  const [request, response, promptAsync] = Google.useIdTokenAuthRequest({
+    clientId: GOOGLE_WEB_CLIENT_ID,
+  });
+
   useEffect(() => {
-    const handleDeepLink = async (event: { url: string }) => {
-      // Moodle nos devuelve algo como: moodleapp://token=EL_TOKEN_GIGANTE...
-      // O a veces: moodleapp://?token=...
-      console.log("Deep link recibido:", event.url);
+    if (response?.type === "success") {
+      const { id_token } = response.params;
+      handleGoogleResponse(id_token);
+    } else if (response?.type === "error") {
+      Alert.alert("Error", "Error al iniciar sesión con Google");
+    } else if (response?.type === "cancel") {
+      Alert.alert("Cancelado", "Inicio de sesión cancelado");
+    }
+  }, [response]);
 
-      let token = "";
-
-      // Lógica para extraer el token de la URL
-      if (event.url.includes("token=")) {
-        const parts = event.url.split("token=");
-        if (parts.length > 1) {
-          token = parts[1].split("&")[0]; // Tomamos lo que esté después de token= y antes de otro &
-        }
-      }
-
-      if (token) {
-        console.log("¡Token capturado!", token);
-        await guardarSesion(token, {
-          fullname: "Usuario Google",
-          username: "google",
-        });
-      }
-    };
-
-    // Suscribirse al evento de enlace
-    const subscription = Linking.addEventListener("url", handleDeepLink);
-    return () => subscription.remove();
-  }, []);
-
-  // Función común para guardar y navegar
   const guardarSesion = async (token: string, userData: any) => {
     try {
       await AsyncStorage.setItem("userToken", token);
@@ -92,49 +64,88 @@ export default function LoginScreen() {
     }
   };
 
-  // --- LOGIN CON GOOGLE ---
-  const handleGoogleLogin = async () => {
+  const handleGoogleResponse = async (idToken: string) => {
     try {
-      // Abre el navegador del sistema (Chrome/Safari) apuntando a Moodle
-      await WebBrowser.openBrowserAsync(MOODLE_LAUNCH_URL);
-      // Cuando el usuario termine en Moodle, el navegador se cerrará solo
-      // y se disparará el useEffect de arriba.
-    } catch (error) {
-      Alert.alert("Error", "No se pudo abrir el navegador");
+      setLoading(true);
+      setErrorMessage("");
+      const result = await loginWithGoogle(idToken);
+
+      console.log("Resultado Google login:", result);
+
+      if (!result.ok) {
+        // Mostrar error si ok es false
+        setLoading(false);
+        setErrorMessage(result.error || "No se pudo iniciar sesión con Google");
+        return;
+      }
+
+      if (result.requiresLinking) {
+        setGoogleIdToken(idToken);
+        setGoogleUser(result.googleUser);
+        setShowLinkForm(true);
+        setLoading(false);
+      } else if (result.token) {
+        await guardarSesion(result.token, result.user);
+      }
+    } catch (error: any) {
+      console.error("Error en handleGoogleResponse:", error);
+      setLoading(false);
+      setErrorMessage(error.message || "Error al iniciar sesión con Google");
+    } finally {
+      setLoading(false);
     }
   };
 
-  // --- LOGIN NORMAL (Backend Node) ---
-  const handleNormalLogin = async () => {
-    if (!username || !password) {
-      Alert.alert("Campos vacíos", "Por favor ingresa usuario y contraseña");
+  const handleGoogleLogin = () => {
+    promptAsync();
+  };
+
+  const handleLinkGoogleMoodle = async () => {
+    if (!username || !password || !googleIdToken) {
+      setErrorMessage("Por favor ingresa tu usuario y contraseña de Moodle");
       return;
     }
 
     setLoading(true);
+    setErrorMessage("");
     try {
-      console.log("Conectando a:", `${BACKEND_URL}/auth/login`);
-      const res = await axios.post(`${BACKEND_URL}/auth/login`, {
-        username,
-        password,
-      });
+      const result = await linkGoogleMoodle(googleIdToken, username, password);
 
-      if (res.data.ok) {
-        await guardarSesion(res.data.token, res.data.user);
+      if (result.ok) {
+        await guardarSesion(result.token, result.user);
         setUsername("");
         setPassword("");
+        setShowLinkForm(false);
+        setGoogleIdToken(null);
+        setGoogleUser(null);
       } else {
-        Alert.alert(
-          "Error de acceso",
-          res.data.error || "Credenciales incorrectas",
-        );
+        setErrorMessage(result.error || "Error vinculando cuentas");
       }
     } catch (error: any) {
-      console.error("Login error:", error.message);
-      Alert.alert(
-        "Error de conexión",
-        "No se pudo conectar con el servidor Node.js",
-      );
+      setErrorMessage(error.message || "Error al vincular cuentas");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleNormalLogin = async () => {
+    if (!username || !password) {
+      setErrorMessage("Por favor ingresa usuario y contraseña");
+      return;
+    }
+
+    setLoading(true);
+    setErrorMessage("");
+    try {
+      const result = await loginBackend(username, password);
+
+      if (result.ok) {
+        await guardarSesion(result.token, result.user);
+      } else {
+        setErrorMessage(result.error || "Credenciales incorrectas");
+      }
+    } catch (error: any) {
+      setErrorMessage(error.message || "Error al iniciar sesión");
     } finally {
       setLoading(false);
     }
@@ -148,14 +159,15 @@ export default function LoginScreen() {
           Bienvenido
         </ThemedText>
         <ThemedText style={styles.subtitle}>
-          Moodle App - U. Guayaquil
+          {showLinkForm && googleUser
+            ? `Hola ${googleUser.name}, vincula tu cuenta de Moodle`
+            : "Moodle App - U. Guayaquil"}
         </ThemedText>
       </ThemedView>
 
       <ThemedView style={styles.card}>
-        {/* INPUTS NORMALES */}
         <ThemedText type="defaultSemiBold" style={styles.label}>
-          Usuario Institucional
+          Usuario {showLinkForm ? "de Moodle" : "Institucional"}
         </ThemedText>
         <TextInput
           style={[
@@ -190,6 +202,12 @@ export default function LoginScreen() {
           secureTextEntry
         />
 
+        {errorMessage ? (
+          <ThemedView style={styles.errorContainer}>
+            <ThemedText style={styles.errorText}>❌ {errorMessage}</ThemedText>
+          </ThemedView>
+        ) : null}
+
         {loading ? (
           <ActivityIndicator
             size="large"
@@ -198,28 +216,50 @@ export default function LoginScreen() {
           />
         ) : (
           <>
-            {/* BOTÓN NORMAL */}
             <TouchableOpacity
               style={styles.loginButton}
-              onPress={handleNormalLogin}
+              onPress={
+                showLinkForm ? handleLinkGoogleMoodle : handleNormalLogin
+              }
             >
-              <ThemedText style={styles.loginButtonText}>Ingresar</ThemedText>
-            </TouchableOpacity>
-
-            <ThemedView style={styles.divider}>
-              <ThemedText style={{ fontSize: 12, opacity: 0.6 }}>
-                O ingresa con
+              <ThemedText style={styles.loginButtonText}>
+                {showLinkForm ? "Vincular Cuentas" : "Ingresar"}
               </ThemedText>
-            </ThemedView>
-
-            {/* BOTÓN GOOGLE */}
-            <TouchableOpacity
-              style={[styles.loginButton, styles.googleButton]}
-              onPress={handleGoogleLogin}
-            >
-              {/* Puedes poner un icono de Google aquí si quieres */}
-              <ThemedText style={styles.loginButtonText}>Google 🌐</ThemedText>
             </TouchableOpacity>
+
+            {!showLinkForm && (
+              <>
+                <ThemedView style={styles.divider}>
+                  <ThemedText style={{ fontSize: 12, opacity: 0.6 }}>
+                    O ingresa con
+                  </ThemedText>
+                </ThemedView>
+
+                <TouchableOpacity
+                  style={[styles.loginButton, styles.googleButton]}
+                  onPress={handleGoogleLogin}
+                >
+                  <ThemedText style={styles.loginButtonText}>
+                    Google 🔐
+                  </ThemedText>
+                </TouchableOpacity>
+              </>
+            )}
+
+            {showLinkForm && (
+              <TouchableOpacity
+                style={[styles.loginButton, styles.cancelButton]}
+                onPress={() => {
+                  setShowLinkForm(false);
+                  setGoogleIdToken(null);
+                  setGoogleUser(null);
+                  setUsername("");
+                  setPassword("");
+                }}
+              >
+                <ThemedText style={styles.loginButtonText}>Cancelar</ThemedText>
+              </TouchableOpacity>
+            )}
           </>
         )}
       </ThemedView>
@@ -277,13 +317,30 @@ const styles = StyleSheet.create({
     marginTop: 10,
   },
   googleButton: {
-    backgroundColor: "#DB4437", // Rojo oficial de Google
+    backgroundColor: "#DB4437",
     marginTop: 0,
+  },
+  cancelButton: {
+    backgroundColor: "#6c757d",
+    marginTop: 10,
   },
   loginButtonText: {
     color: "white",
     fontSize: 16,
     fontWeight: "bold",
+  },
+  errorContainer: {
+    backgroundColor: "#f8d7da",
+    padding: 12,
+    borderRadius: 8,
+    marginBottom: 15,
+    borderWidth: 1,
+    borderColor: "#f5c6cb",
+  },
+  errorText: {
+    color: "#721c24",
+    fontSize: 14,
+    textAlign: "center",
   },
   divider: {
     alignItems: "center",
