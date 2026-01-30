@@ -1,8 +1,8 @@
-import axios from "axios";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import axios from "axios";
 
 // AJUSTA TU IP AQUÍ
-const API_URL = "http://192.168.100.67:3000";
+const API_URL = "http://192.168.100.36:3000";
 
 export const api = axios.create({
   baseURL: API_URL,
@@ -21,9 +21,12 @@ api.interceptors.request.use(async (config) => {
 export async function loginBackend(username: string, password: string) {
   try {
     const { data } = await api.post("/auth/login", { username, password });
-    return data; 
+    return data;
   } catch (error: any) {
-    return { ok: false, error: error.response?.data?.error || "Credenciales incorrectas" };
+    return {
+      ok: false,
+      error: error.response?.data?.error || "Credenciales incorrectas",
+    };
   }
 }
 
@@ -59,17 +62,20 @@ export async function submitAssign(assignId: number) {
   return data;
 }
 
-export async function saveAssignFile(assignId: number, file: { uri: string; name: string; type?: string }) {
+export async function saveAssignFile(
+  assignId: number,
+  file: { uri: string; name: string; type?: string },
+) {
   const form = new FormData();
   // @ts-ignore
-  form.append("file", { 
-    uri: file.uri, 
-    name: file.name, 
-    type: file.type || "application/octet-stream" 
+  form.append("file", {
+    uri: file.uri,
+    name: file.name,
+    type: file.type || "application/octet-stream",
   });
 
   const token = await AsyncStorage.getItem("userToken");
-  
+
   const res = await fetch(`${API_URL}/assign/${assignId}/save-file`, {
     method: "POST",
     headers: token ? { Authorization: `Bearer ${token}` } : undefined,
@@ -90,7 +96,11 @@ export async function getDiscussionPosts(discussionId: number) {
   return data.posts?.posts ?? data.posts ?? [];
 }
 
-export async function replyToPost(postid: number, subject: string, messageHtml: string) {
+export async function replyToPost(
+  postid: number,
+  subject: string,
+  messageHtml: string,
+) {
   const { data } = await api.post(`/forum/reply`, {
     postid,
     subject,
