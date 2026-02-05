@@ -1,14 +1,18 @@
-import axios from "axios";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import axios from "axios";
 
-// AJUSTA TU IP AQUÍ
-const API_URL = "http://192.168.100.67:3000";
+const API_URL = process.env.EXPO_PUBLIC_API_BASE_URL;
+
+if (!API_URL) {
+  throw new Error("EXPO_PUBLIC_API_BASE_URL no est\u00e1 definida en .env");
+}
 
 export const api = axios.create({
   baseURL: API_URL,
   timeout: 30000,
 });
 
+// Agrega el token de autenticación a todas las peticiones
 api.interceptors.request.use(async (config) => {
   const token = await AsyncStorage.getItem("userToken");
   if (token) {
@@ -17,17 +21,20 @@ api.interceptors.request.use(async (config) => {
   return config;
 });
 
-// AUTENTICACIÓN
+// Autenticación
 export async function loginBackend(username: string, password: string) {
   try {
     const { data } = await api.post("/auth/login", { username, password });
-    return data; 
+    return data;
   } catch (error: any) {
-    return { ok: false, error: error.response?.data?.error || "Credenciales incorrectas" };
+    return {
+      ok: false,
+      error: error.response?.data?.error || "Credenciales incorrectas",
+    };
   }
 }
 
-// CURSOS Y CONTENIDOS
+// Cursos
 export async function getCourses() {
   const { data } = await api.get("/courses");
   return data.courses || [];
@@ -43,7 +50,17 @@ export async function getCourseGrades(courseId: number) {
   return data.grades || [];
 }
 
-// 3. TAREAS
+export async function getCourseAssignments(courseId: number) {
+  const { data } = await api.get(`/course/${courseId}/assignments`);
+  return data.assignments || [];
+}
+
+export async function getCourseForums(courseId: number) {
+  const { data } = await api.get(`/course/${courseId}/forums`);
+  return data.forums || [];
+}
+
+// Tareas
 export async function getAssignStatus(assignId: number) {
   const { data } = await api.get(`/assign/${assignId}/status`);
   return data.status;
@@ -59,27 +76,69 @@ export async function submitAssign(assignId: number) {
   return data;
 }
 
-export async function saveAssignFile(assignId: number, file: { uri: string; name: string; type?: string }) {
-  const form = new FormData();
-  // @ts-ignore
-  form.append("file", { 
-    uri: file.uri, 
-    name: file.name, 
-    type: file.type || "application/octet-stream" 
-  });
+export async function saveAssignFile(
+  assignId: number,
+  file: { uri: string; name: string; type?: string },
+) {
+  try {
+    const token = await AsyncStorage.getItem("userToken");
+    if (!token) {
+      return { ok: false, error: "No hay token de autenticación" };
+    }
 
-  const token = await AsyncStorage.getItem("userToken");
-  
-  const res = await fetch(`${API_URL}/assign/${assignId}/save-file`, {
-    method: "POST",
-    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-    body: form,
-  });
+    let formData = new FormData();
 
-  return await res.json();
+    // Convierte blob para web, usa URI directamente en nativo
+    if (file.uri.startsWith("http") || file.uri.startsWith("blob:")) {
+      const response = await fetch(file.uri);
+      const blob = await response.blob();
+      formData.append("file", blob, file.name);
+    } else {
+      formData.append("file", {
+        uri: file.uri,
+        name: file.name,
+        type: file.type || "application/octet-stream",
+      } as any);
+    }
+
+    const uploadResult = await fetch(
+      `${API_URL}/assign/${assignId}/save-file`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+        body: formData,
+      },
+    );
+
+    if (uploadResult.ok) {
+      const response = await uploadResult.json();
+      return response;
+    } else {
+      try {
+        const errorResponse = await uploadResult.json();
+        return {
+          ok: false,
+          error: errorResponse.error || "Error al subir archivo",
+        };
+      } catch (e) {
+        const errorText = await uploadResult.text();
+        return {
+          ok: false,
+          error: `Error ${uploadResult.status}: ${errorText}`,
+        };
+      }
+    }
+  } catch (error: any) {
+    return {
+      ok: false,
+      error: error.message || "Error al subir el archivo",
+    };
+  }
 }
 
-// FOROS
+// Foros
 export async function getForumDiscussions(forumId: number) {
   const { data } = await api.get(`/forum/${forumId}/discussions`);
   return data.discussions?.discussions ?? data.discussions ?? [];
@@ -90,7 +149,43 @@ export async function getDiscussionPosts(discussionId: number) {
   return data.posts?.posts ?? data.posts ?? [];
 }
 
-export async function replyToPost(postid: number, subject: string, messageHtml: string) {
+export async function loginWithGoogle(idToken: string) {
+  try {
+    const { data } = await api.post("/auth/google", { idToken });
+    return data;
+  } catch (error: any) {
+    return {
+      ok: false,
+      error: error.response?.data?.error || "Error en autenticación con Google",
+    };
+  }
+}
+
+export async function linkGoogleMoodle(
+  idToken: string,
+  username: string,
+  password: string,
+) {
+  try {
+    const { data } = await api.post("/auth/link-google-moodle", {
+      idToken,
+      username,
+      password,
+    });
+    return data;
+  } catch (error: any) {
+    return {
+      ok: false,
+      error: error.response?.data?.error || "Error vinculando cuentas",
+    };
+  }
+}
+
+export async function replyToPost(
+  postid: number,
+  subject: string,
+  messageHtml: string,
+) {
   const { data } = await api.post(`/forum/reply`, {
     postid,
     subject,

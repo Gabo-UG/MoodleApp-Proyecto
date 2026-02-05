@@ -1,102 +1,349 @@
-import React, { useState } from 'react';
-import { 
-  View, Text, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator, Alert 
-} from 'react-native';
-import { useRouter } from 'expo-router';
-import axios from 'axios';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+//index.tsx
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import * as Google from "expo-auth-session/providers/google";
+import { useRouter } from "expo-router";
+import * as WebBrowser from "expo-web-browser";
+import React, { useEffect, useState } from "react";
+import {
+  ActivityIndicator,
+  Alert,
+  StyleSheet,
+  TextInput,
+  TouchableOpacity,
+  useColorScheme,
+} from "react-native";
 
-// AJUSTA TU IP AQUÍ
-const BACKEND_URL = 'http://192.168.100.67:3000'; 
+import { HelloWave } from "@/components/hello-wave";
+import { ThemedText } from "@/components/themed-text";
+import { ThemedView } from "@/components/themed-view";
+import {
+  linkGoogleMoodle,
+  loginBackend,
+  loginWithGoogle,
+} from "@/services/moodle";
+
+WebBrowser.maybeCompleteAuthSession();
+
+const GOOGLE_WEB_CLIENT_ID =
+  "1022276104325-k1s713c9lvgnc571cftp2vo6ucvqpfsq.apps.googleusercontent.com";
 
 export default function LoginScreen() {
   const router = useRouter();
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
-  const [loading, setLoading] = useState(false);
+  const colorScheme = useColorScheme();
 
-  const handleNormalLogin = async () => {
-    if (!username || !password) {
-      Alert.alert('Error', 'Por favor ingresa usuario y contraseña');
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [googleIdToken, setGoogleIdToken] = useState<string | null>(null);
+  const [googleUser, setGoogleUser] = useState<any>(null);
+  const [showLinkForm, setShowLinkForm] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string>("");
+
+  const [request, response, promptAsync] = Google.useIdTokenAuthRequest({
+    clientId: GOOGLE_WEB_CLIENT_ID,
+  });
+
+  useEffect(() => {
+    if (response?.type === "success") {
+      const { id_token } = response.params;
+      handleGoogleResponse(id_token);
+    } else if (response?.type === "error") {
+      Alert.alert("Error", "Error al iniciar sesión con Google");
+    } else if (response?.type === "cancel") {
+      Alert.alert("Cancelado", "Inicio de sesión cancelado");
+    }
+  }, [response]);
+
+  const guardarSesion = async (token: string, userData: any) => {
+    try {
+      await AsyncStorage.setItem("userToken", token);
+      await AsyncStorage.setItem("userData", JSON.stringify(userData));
+      router.replace("/cursos");
+    } catch (e) {
+      Alert.alert("Error", "No se pudo guardar la sesión");
+    }
+  };
+
+  const handleGoogleResponse = async (idToken: string) => {
+    try {
+      setLoading(true);
+      setErrorMessage("");
+      const result = await loginWithGoogle(idToken);
+
+      console.log("Resultado Google login:", result);
+
+      if (!result.ok) {
+        // Mostrar error si ok es false
+        setLoading(false);
+        setErrorMessage(result.error || "No se pudo iniciar sesión con Google");
+        return;
+      }
+
+      if (result.requiresLinking) {
+        setGoogleIdToken(idToken);
+        setGoogleUser(result.googleUser);
+        setShowLinkForm(true);
+        setLoading(false);
+      } else if (result.token) {
+        await guardarSesion(result.token, result.user);
+      }
+    } catch (error: any) {
+      console.error("Error en handleGoogleResponse:", error);
+      setLoading(false);
+      setErrorMessage(error.message || "Error al iniciar sesión con Google");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleGoogleLogin = () => {
+    promptAsync();
+  };
+
+  const handleLinkGoogleMoodle = async () => {
+    if (!username || !password || !googleIdToken) {
+      setErrorMessage("Por favor ingresa tu usuario y contraseña de Moodle");
       return;
     }
 
     setLoading(true);
+    setErrorMessage("");
     try {
-      console.log('Intentando login con:', username);
-      const res = await axios.post(`${BACKEND_URL}/auth/login`, {
-        username,
-        password
-      });
+      const result = await linkGoogleMoodle(googleIdToken, username, password);
 
-      if (res.data.ok) {
-        // Guardar sesión
-        await AsyncStorage.setItem('userToken', res.data.token.toString());
-        await AsyncStorage.setItem('userData', JSON.stringify(res.data.user));
-        
-        // Limpiar y navegar
-        setUsername('');
-        setPassword('');
-        router.replace('/cursos');
+      if (result.ok) {
+        await guardarSesion(result.token, result.user);
+        setUsername("");
+        setPassword("");
+        setShowLinkForm(false);
+        setGoogleIdToken(null);
+        setGoogleUser(null);
       } else {
-        Alert.alert('Error de acceso', res.data.error || 'Credenciales incorrectas');
+        setErrorMessage(result.error || "Error vinculando cuentas");
       }
     } catch (error: any) {
-      console.error('Login error:', error.message);
-      Alert.alert('Error de conexión', 'No se pudo conectar con el servidor.');
+      setErrorMessage(error.message || "Error al vincular cuentas");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleNormalLogin = async () => {
+    if (!username || !password) {
+      setErrorMessage("Por favor ingresa usuario y contraseña");
+      return;
+    }
+
+    setLoading(true);
+    setErrorMessage("");
+    try {
+      const result = await loginBackend(username, password);
+
+      if (result.ok) {
+        await guardarSesion(result.token, result.user);
+      } else {
+        setErrorMessage(result.error || "Credenciales incorrectas");
+      }
+    } catch (error: any) {
+      setErrorMessage(error.message || "Error al iniciar sesión");
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <View style={styles.container}>
-      <View style={styles.card}>
-        <Text style={styles.title}>Moodle App</Text>
-        <Text style={styles.subtitle}>Universidad de Guayaquil</Text>
+    <ThemedView style={styles.container}>
+      <ThemedView style={styles.headerContainer}>
+        <HelloWave />
+        <ThemedText type="title" style={styles.title}>
+          Bienvenido
+        </ThemedText>
+        <ThemedText style={styles.subtitle}>
+          {showLinkForm && googleUser
+            ? `Hola ${googleUser.name}, vincula tu cuenta de Moodle`
+            : "Moodle App - U. Guayaquil"}
+        </ThemedText>
+      </ThemedView>
 
-        <View style={styles.inputContainer}>
-          <Text style={styles.label}>Usuario Institucional</Text>
-          <TextInput
-            style={styles.input}
-            placeholder="Ej: juan.perez"
-            value={username}
-            onChangeText={setUsername}
-            autoCapitalize="none"
-          />
-        </View>
+      <ThemedView style={styles.card}>
+        <ThemedText type="defaultSemiBold" style={styles.label}>
+          Usuario {showLinkForm ? "de Moodle" : "Institucional"}
+        </ThemedText>
+        <TextInput
+          style={[
+            styles.input,
+            {
+              color: colorScheme === "dark" ? "#fff" : "#000",
+              borderColor: colorScheme === "dark" ? "#444" : "#ddd",
+            },
+          ]}
+          placeholder="Ej: estudiante1"
+          placeholderTextColor="#888"
+          value={username}
+          onChangeText={setUsername}
+          autoCapitalize="none"
+        />
 
-        <View style={styles.inputContainer}>
-          <Text style={styles.label}>Contraseña</Text>
-          <TextInput
-            style={styles.input}
-            placeholder="********"
-            value={password}
-            onChangeText={setPassword}
-            secureTextEntry
-          />
-        </View>
+        <ThemedText type="defaultSemiBold" style={styles.label}>
+          Contraseña
+        </ThemedText>
+        <TextInput
+          style={[
+            styles.input,
+            {
+              color: colorScheme === "dark" ? "#fff" : "#000",
+              borderColor: colorScheme === "dark" ? "#444" : "#ddd",
+            },
+          ]}
+          placeholder="********"
+          placeholderTextColor="#888"
+          value={password}
+          onChangeText={setPassword}
+          secureTextEntry
+        />
+
+        {errorMessage ? (
+          <ThemedView style={styles.errorContainer}>
+            <ThemedText style={styles.errorText}>❌ {errorMessage}</ThemedText>
+          </ThemedView>
+        ) : null}
 
         {loading ? (
-          <ActivityIndicator size="large" color="#0056b3" style={{ marginTop: 20 }} />
+          <ActivityIndicator
+            size="large"
+            color="#0056b3"
+            style={{ marginTop: 20 }}
+          />
         ) : (
-          <TouchableOpacity style={styles.loginButton} onPress={handleNormalLogin}>
-            <Text style={styles.loginButtonText}>Ingresar</Text>
-          </TouchableOpacity>
+          <>
+            <TouchableOpacity
+              style={styles.loginButton}
+              onPress={
+                showLinkForm ? handleLinkGoogleMoodle : handleNormalLogin
+              }
+            >
+              <ThemedText style={styles.loginButtonText}>
+                {showLinkForm ? "Vincular Cuentas" : "Ingresar"}
+              </ThemedText>
+            </TouchableOpacity>
+
+            {!showLinkForm && (
+              <>
+                <ThemedView style={styles.divider}>
+                  <ThemedText style={{ fontSize: 12, opacity: 0.6 }}>
+                    O ingresa con
+                  </ThemedText>
+                </ThemedView>
+
+                <TouchableOpacity
+                  style={[styles.loginButton, styles.googleButton]}
+                  onPress={handleGoogleLogin}
+                >
+                  <ThemedText style={styles.loginButtonText}>
+                    Google 🔐
+                  </ThemedText>
+                </TouchableOpacity>
+              </>
+            )}
+
+            {showLinkForm && (
+              <TouchableOpacity
+                style={[styles.loginButton, styles.cancelButton]}
+                onPress={() => {
+                  setShowLinkForm(false);
+                  setGoogleIdToken(null);
+                  setGoogleUser(null);
+                  setUsername("");
+                  setPassword("");
+                }}
+              >
+                <ThemedText style={styles.loginButtonText}>Cancelar</ThemedText>
+              </TouchableOpacity>
+            )}
+          </>
         )}
-      </View>
-    </View>
+      </ThemedView>
+    </ThemedView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f0f2f5', justifyContent: 'center', padding: 20 },
-  card: { backgroundColor: 'white', borderRadius: 15, padding: 25, elevation: 3 },
-  title: { fontSize: 28, fontWeight: 'bold', color: '#333', textAlign: 'center', marginBottom: 5 },
-  subtitle: { fontSize: 14, color: '#666', textAlign: 'center', marginBottom: 30 },
-  inputContainer: { marginBottom: 15 },
-  label: { fontSize: 14, color: '#333', marginBottom: 5, fontWeight: '500' },
-  input: { borderWidth: 1, borderColor: '#ddd', borderRadius: 8, padding: 12, fontSize: 16, backgroundColor: '#fafafa' },
-  loginButton: { backgroundColor: '#0056b3', padding: 15, borderRadius: 8, alignItems: 'center', marginTop: 10 },
-  loginButtonText: { color: 'white', fontSize: 16, fontWeight: 'bold' },
+  container: {
+    flex: 1,
+    justifyContent: "center",
+    padding: 20,
+  },
+  headerContainer: {
+    marginBottom: 40,
+    alignItems: "center",
+  },
+  title: {
+    marginTop: 10,
+    textAlign: "center",
+  },
+  subtitle: {
+    fontSize: 16,
+    opacity: 0.7,
+    marginTop: 5,
+    textAlign: "center",
+  },
+  card: {
+    padding: 20,
+    borderRadius: 16,
+    // Sombra suave
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 12,
+    elevation: 5,
+  },
+  label: {
+    marginBottom: 8,
+    fontSize: 14,
+  },
+  input: {
+    borderWidth: 1,
+    borderRadius: 12,
+    padding: 14,
+    fontSize: 16,
+    marginBottom: 20,
+    backgroundColor: "transparent", // Para que tome el fondo del ThemedView si fuera necesario
+  },
+  loginButton: {
+    backgroundColor: "#0056b3",
+    padding: 16,
+    borderRadius: 12,
+    alignItems: "center",
+    marginTop: 10,
+  },
+  googleButton: {
+    backgroundColor: "#DB4437",
+    marginTop: 0,
+  },
+  cancelButton: {
+    backgroundColor: "#6c757d",
+    marginTop: 10,
+  },
+  loginButtonText: {
+    color: "white",
+    fontSize: 16,
+    fontWeight: "bold",
+  },
+  errorContainer: {
+    backgroundColor: "#f8d7da",
+    padding: 12,
+    borderRadius: 8,
+    marginBottom: 15,
+    borderWidth: 1,
+    borderColor: "#f5c6cb",
+  },
+  errorText: {
+    color: "#721c24",
+    fontSize: 14,
+    textAlign: "center",
+  },
+  divider: {
+    alignItems: "center",
+    marginVertical: 15,
+  },
 });
