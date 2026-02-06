@@ -142,7 +142,7 @@ export async function saveAssignCombined(
   assignId: number,
   data: {
     text?: string;
-    file?: { uri: string; name: string; type?: string };
+    files?: { uri: string; name: string; type?: string }[];
   },
 ) {
   try {
@@ -153,27 +153,28 @@ export async function saveAssignCombined(
 
     let formData = new FormData();
 
-    // Agregar texto si existe
-    if (data.text && data.text.trim().length > 0) {
-      formData.append("text", data.text);
-    }
+    // Agregar texto (siempre, aunque esté vacío, para permitir borrado)
+    formData.append("text", data.text || "");
 
-    // Agregar archivo si existe
-    if (data.file) {
-      // Convierte blob para web, usa URI directamente en nativo
-      if (
-        data.file.uri.startsWith("http") ||
-        data.file.uri.startsWith("blob:")
-      ) {
-        const response = await fetch(data.file.uri);
-        const blob = await response.blob();
-        formData.append("file", blob, data.file.name);
-      } else {
-        formData.append("file", {
-          uri: data.file.uri,
-          name: data.file.name,
-          type: data.file.type || "application/octet-stream",
-        } as any);
+    // Agregar archivos si existen
+    if (data.files && data.files.length > 0) {
+      for (let i = 0; i < data.files.length; i++) {
+        const file = data.files[i];
+
+        // Convierte blob para web, usa URI directamente en nativo
+        if (file.uri.startsWith("http") || file.uri.startsWith("blob:")) {
+          const response = await fetch(file.uri);
+          const blob = await response.blob();
+          formData.append("file", blob, file.name);
+        } else {
+          // Para React Native
+          const fileData = {
+            uri: file.uri,
+            name: file.name,
+            type: file.type || "application/octet-stream",
+          };
+          formData.append("file", fileData as any);
+        }
       }
     }
 
@@ -183,6 +184,7 @@ export async function saveAssignCombined(
         method: "POST",
         headers: {
           Authorization: `Bearer ${token}`,
+          // NO agregar Content-Type, FormData lo maneja automáticamente
         },
         body: formData,
       },
@@ -192,21 +194,26 @@ export async function saveAssignCombined(
       const response = await uploadResult.json();
       return response;
     } else {
+      // Leer el cuerpo de la respuesta una sola vez
+      const responseText = await uploadResult.text();
+      console.error("Error del servidor (status:", uploadResult.status, ")");
+      console.error("Respuesta:", responseText);
+
       try {
-        const errorResponse = await uploadResult.json();
+        const errorResponse = JSON.parse(responseText);
         return {
           ok: false,
           error: errorResponse.error || "Error al guardar entrega",
         };
       } catch (e) {
-        const errorText = await uploadResult.text();
         return {
           ok: false,
-          error: `Error ${uploadResult.status}: ${errorText}`,
+          error: `Error ${uploadResult.status}: ${responseText}`,
         };
       }
     }
   } catch (error: any) {
+    console.error("Error en saveAssignCombined:", error);
     return {
       ok: false,
       error: error.message || "Error al guardar la entrega",
