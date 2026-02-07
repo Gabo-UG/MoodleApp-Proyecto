@@ -33,7 +33,14 @@ export default function PantallaForo() {
     try {
       setLoading(true);
       const d = await getForumDiscussions(forumId);
+      console.log("Discusiones cargadas:", d);
+      console.log("Número de discusiones:", d.length);
+      if (d.length > 0) {
+        console.log("Primera discusión:", JSON.stringify(d[0], null, 2));
+      }
       setDiscusiones(d);
+    } catch (error) {
+      console.error("Error cargando discusiones:", error);
     } finally {
       setLoading(false);
     }

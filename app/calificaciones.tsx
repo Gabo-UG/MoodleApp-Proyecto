@@ -42,7 +42,16 @@ export default function PantallaCalificaciones() {
   const limpiarHTML = (html: any) => {
     if (!html) return "";
     if (typeof html !== "string") return String(html);
-    return html.replace(/<[^>]+>/g, "").trim();
+    return html
+      .replace(/<[^>]+>/g, " ")
+
+      .replace(/&nbsp;/g, "") //comentario en nota
+      .replace(/&amp;/g, "&") // Convierte &amp; a &
+      .replace(/&lt;/g, "<") // Convierte &lt; a <
+      .replace(/&gt;/g, ">") // Convierte &gt; a >
+      .replace(/&quot;/g, '"') // Convierte &quot; a "
+      .replace(/&#039;/g, "'")
+      .trim();
   };
 
   // Verifica si un item tiene calificación asignada
@@ -208,7 +217,9 @@ export default function PantallaCalificaciones() {
           </Text>
         </View>
 
-        {feedback ? <Text style={styles.feedback}>💬 {feedback}</Text> : null}
+        {feedback && feedback.trim().length ? (
+          <Text style={styles.feedback}>💬 {feedback}</Text>
+        ) : null}
       </View>
     );
   };

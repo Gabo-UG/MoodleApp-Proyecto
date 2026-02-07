@@ -121,6 +121,35 @@ export default function Detalles() {
     return forums.find((f) => f.id === instance);
   };
 
+  //---------------------------------------------------------------------------
+  //método para traducir el tipo asignación
+
+  const getModuleDisplayName = (item: any) => {
+    const modname = item.modname;
+    const instance = item.instance;
+
+    let typeLabel = "";
+    let sectionName = null;
+
+    if (modname === "assign") {
+      typeLabel = "Tarea";
+      const assignInfo = assignments.find((a) => a.id === instance);
+      sectionName = assignInfo?.sectionName; // Usar el nombre de la sección
+    } else if (modname === "forum") {
+      typeLabel = "Foro";
+      const forumInfo = forums.find((f) => f.id === instance);
+      sectionName = forumInfo?.sectionName; // Usar el nombre de la sección
+    } else if (modname === "resource") {
+      typeLabel = "Recurso";
+    } else if (modname === "url") {
+      typeLabel = "Enlace";
+    } else {
+      typeLabel = modname.charAt(0).toUpperCase() + modname.slice(1);
+    }
+
+    return sectionName ? `${typeLabel} - ${sectionName}` : typeLabel; //muestra el tipo y Unidad
+  };
+
   // Filtra solo las actividades relevantes: tareas, foros, recursos y enlaces
   const items = useMemo(() => {
     return modules.filter((m) =>
@@ -295,6 +324,36 @@ export default function Detalles() {
   return (
     <View style={styles.container}>
       <Stack.Screen options={{ title: nombreCurso || "Detalles" }} />
+
+      {/*Botón ver Participantes-----------------------------------------*/}
+
+      <Pressable
+        style={{
+          backgroundColor: "#0056b3",
+          padding: 12,
+          borderRadius: 12,
+          marginHorizontal: 15,
+          marginBottom: 12,
+        }}
+        onPress={() =>
+          router.push({
+            pathname: "/participantes",
+            params: {
+              courseId: String(courseId),
+              nombreCurso: String(nombreCurso ?? ""),
+            },
+          })
+        }
+      >
+        <Text
+          style={{ color: "white", fontWeight: "bold", textAlign: "center" }}
+        >
+          Participantes
+        </Text>
+      </Pressable>
+
+      {/*Botón ver calificaciones-----------------------------------------*/}
+
       <Pressable
         style={{
           backgroundColor: "#0056b3",
@@ -320,6 +379,7 @@ export default function Detalles() {
         </Text>
       </Pressable>
 
+      {/*Botón Filtros de actividades-------------------------------------------------*/}
       <View style={styles.filterContainer}>
         <Pressable
           style={styles.filterButton}
@@ -373,7 +433,6 @@ export default function Detalles() {
           </View>
         )}
       </View>
-
       <FlatList
         data={groupedItems}
         keyExtractor={(item, index) =>
@@ -458,9 +517,7 @@ export default function Detalles() {
                 </Text>
               )}
 
-              <Text style={styles.cardMeta}>
-                {item.modname} • instance: {item.instance}
-              </Text>
+              <Text style={styles.cardMeta}>{getModuleDisplayName(item)}</Text>
             </Pressable>
           );
         }}
