@@ -1,20 +1,22 @@
+import { useFocusEffect } from "@react-navigation/native";
 import { router, Stack, useLocalSearchParams } from "expo-router";
 import React, { useEffect, useMemo, useState } from "react";
 import {
-    ActivityIndicator,
-    Alert,
-    FlatList,
-    Linking,
-    Pressable,
-    StyleSheet,
-    Text,
-    View,
+  ActivityIndicator,
+  Alert,
+  FlatList,
+  Linking,
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
 } from "react-native";
 import { API_BASE } from "../services/api";
 import {
-    getCourseAssignments,
-    getCourseContents,
-    getCourseForums,
+  getAssignStatus,
+  getCourseAssignments,
+  getCourseContents,
+  getCourseForums,
 } from "../services/moodle";
 
 export default function Detalles() {
@@ -29,26 +31,62 @@ export default function Detalles() {
   const [forums, setForums] = useState<any[]>([]);
   const [filter, setFilter] = useState<string>("all");
   const [showFilterMenu, setShowFilterMenu] = useState(false);
+  const [submissionStatus, setSubmissionStatus] = useState<{
+    [key: number]: boolean;
+  }>({});
 
   // Carga inicial de contenidos y tareas del curso
   useEffect(() => {
-    (async () => {
-      try {
-        setLoading(true);
-        const [contents, assigns, forumsData] = await Promise.all([
-          getCourseContents(Number(courseId)),
-          getCourseAssignments(Number(courseId)),
-          getCourseForums(Number(courseId)),
-        ]);
-        const mods = contents.flatMap((sec: any) => sec.modules || []);
-        setModules(mods);
-        setAssignments(assigns);
-        setForums(forumsData);
-      } finally {
-        setLoading(false);
-      }
-    })();
+    cargarDatos();
   }, [courseId]);
+
+  // Recarga los datos cuando la pantalla recibe foco
+  useFocusEffect(
+    React.useCallback(() => {
+      cargarDatos();
+    }, [courseId]),
+  );
+
+  const cargarDatos = async () => {
+    try {
+      setLoading(true);
+      const [contents, assigns, forumsData] = await Promise.all([
+        getCourseContents(Number(courseId)),
+        getCourseAssignments(Number(courseId)),
+        getCourseForums(Number(courseId)),
+      ]);
+      const mods = contents.flatMap((sec: any) => sec.modules || []);
+      setModules(mods);
+      setAssignments(assigns);
+      setForums(forumsData);
+
+      // Verificar estado de envío de cada tarea
+      verificarEstadoTareas(assigns);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Verifica el estado de envío de todas las tareas
+  const verificarEstadoTareas = async (assigns: any[]) => {
+    const statusMap: { [key: number]: boolean } = {};
+
+    // Verificar estado de cada tarea en paralelo
+    const promises = assigns.map(async (assign) => {
+      try {
+        const status = await getAssignStatus(assign.id);
+        const submission = status?.lastattempt?.submission;
+        const isSubmitted = submission?.status === "submitted";
+        statusMap[assign.id] = isSubmitted;
+      } catch (error) {
+        // Si hay error, asumir que no está enviada
+        statusMap[assign.id] = false;
+      }
+    });
+
+    await Promise.all(promises);
+    setSubmissionStatus(statusMap);
+  };
 
   // Formatea la fecha para los encabezados de sección
   const formatDateHeader = (timestamp: number) => {
@@ -81,6 +119,35 @@ export default function Detalles() {
   // Busca información de un foro por su instance ID
   const getForumInfo = (instance: number) => {
     return forums.find((f) => f.id === instance);
+  };
+
+  //---------------------------------------------------------------------------
+  //método para traducir el tipo asignación
+
+  const getModuleDisplayName = (item: any) => {
+    const modname = item.modname;
+    const instance = item.instance;
+
+    let typeLabel = "";
+    let sectionName = null;
+
+    if (modname === "assign") {
+      typeLabel = "Tarea";
+      const assignInfo = assignments.find((a) => a.id === instance);
+      sectionName = assignInfo?.sectionName; // Usar el nombre de la sección
+    } else if (modname === "forum") {
+      typeLabel = "Foro";
+      const forumInfo = forums.find((f) => f.id === instance);
+      sectionName = forumInfo?.sectionName; // Usar el nombre de la sección
+    } else if (modname === "resource") {
+      typeLabel = "Recurso";
+    } else if (modname === "url") {
+      typeLabel = "Enlace";
+    } else {
+      typeLabel = modname.charAt(0).toUpperCase() + modname.slice(1);
+    }
+
+    return sectionName ? `${typeLabel} - ${sectionName}` : typeLabel; //muestra el tipo y Unidad
   };
 
   // Filtra solo las actividades relevantes: tareas, foros, recursos y enlaces
@@ -257,6 +324,36 @@ export default function Detalles() {
   return (
     <View style={styles.container}>
       <Stack.Screen options={{ title: nombreCurso || "Detalles" }} />
+
+      {/*Botón ver Participantes-----------------------------------------*/}
+
+      <Pressable
+        style={{
+          backgroundColor: "#0056b3",
+          padding: 12,
+          borderRadius: 12,
+          marginHorizontal: 15,
+          marginBottom: 12,
+        }}
+        onPress={() =>
+          router.push({
+            pathname: "/participantes",
+            params: {
+              courseId: String(courseId),
+              nombreCurso: String(nombreCurso ?? ""),
+            },
+          })
+        }
+      >
+        <Text
+          style={{ color: "white", fontWeight: "bold", textAlign: "center" }}
+        >
+          Participantes
+        </Text>
+      </Pressable>
+
+      {/*Botón ver calificaciones-----------------------------------------*/}
+
       <Pressable
         style={{
           backgroundColor: "#0056b3",
@@ -282,6 +379,7 @@ export default function Detalles() {
         </Text>
       </Pressable>
 
+      {/*Botón Filtros de actividades-------------------------------------------------*/}
       <View style={styles.filterContainer}>
         <Pressable
           style={styles.filterButton}
@@ -335,7 +433,6 @@ export default function Detalles() {
           </View>
         )}
       </View>
-
       <FlatList
         data={groupedItems}
         keyExtractor={(item, index) =>
@@ -386,14 +483,30 @@ export default function Detalles() {
             item.timecreated;
           const isOverdue = displayDate && displayDate < now;
 
+          // Verificar si la tarea está enviada
+          const isSubmitted =
+            item.modname === "assign" &&
+            submissionStatus[item.instance] === true;
+
           return (
             <Pressable
-              style={[styles.card, isOverdue && styles.cardOverdue]}
+              style={[
+                styles.card,
+                isOverdue && !isSubmitted && styles.cardOverdue,
+                isSubmitted && styles.cardSubmitted,
+              ]}
               onPress={() => onPressItem(item)}
             >
-              <Text style={styles.cardTitle}>
-                {icon(item.modname)} {item.name}
-              </Text>
+              <View style={styles.cardHeader}>
+                <Text style={styles.cardTitle}>
+                  {icon(item.modname)} {item.name}
+                </Text>
+                {isSubmitted && (
+                  <View style={styles.submittedBadge}>
+                    <Text style={styles.submittedText}>✓ Enviado</Text>
+                  </View>
+                )}
+              </View>
 
               {timeToShow && (
                 <Text style={styles.timeText}>
@@ -404,9 +517,7 @@ export default function Detalles() {
                 </Text>
               )}
 
-              <Text style={styles.cardMeta}>
-                {item.modname} • instance: {item.instance}
-              </Text>
+              <Text style={styles.cardMeta}>{getModuleDisplayName(item)}</Text>
             </Pressable>
           );
         }}
@@ -435,7 +546,34 @@ const styles = StyleSheet.create({
     backgroundColor: "#ffebee",
     borderColor: "#ffcdd2",
   },
-  cardTitle: { fontSize: 16, fontWeight: "700", marginBottom: 6 },
+  cardSubmitted: {
+    backgroundColor: "#e8f5e9",
+    borderColor: "#4caf50",
+    borderWidth: 2,
+  },
+  cardHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    marginBottom: 6,
+  },
+  cardTitle: {
+    fontSize: 16,
+    fontWeight: "700",
+    flex: 1,
+    marginRight: 8,
+  },
+  submittedBadge: {
+    backgroundColor: "#4caf50",
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  submittedText: {
+    color: "white",
+    fontSize: 12,
+    fontWeight: "600",
+  },
   timeText: { fontSize: 12, color: "#666", marginTop: 4 },
   cardMeta: { opacity: 0.7, marginTop: 8 },
   dateText: { fontSize: 12, color: "#666", marginTop: 4 },
