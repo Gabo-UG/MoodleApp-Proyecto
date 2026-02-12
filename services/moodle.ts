@@ -6,7 +6,9 @@ const API_URL = process.env.EXPO_PUBLIC_API_BASE_URL;
 if (!API_URL) {
   throw new Error("EXPO_PUBLIC_API_BASE_URL no est\u00e1 definida en .env");
 }
+// ......
 
+//
 export const api = axios.create({
   baseURL: API_URL,
   timeout: 30000,
@@ -58,6 +60,12 @@ export async function getCourseAssignments(courseId: number) {
 export async function getCourseForums(courseId: number) {
   const { data } = await api.get(`/course/${courseId}/forums`);
   return data.forums || [];
+}
+
+export async function getParticipants(courseId: number) {
+  const { data } = await api.get(`/course/${courseId}/participants`);
+  console.log("Participantes recibidos:", data.participants?.length || 0);
+  return data.participants || [];
 }
 
 // Tareas
@@ -138,15 +146,126 @@ export async function saveAssignFile(
   }
 }
 
+export async function saveAssignCombined(
+  assignId: number,
+  data: {
+    text?: string;
+    files?: { uri: string; name: string; type?: string }[];
+  },
+) {
+  try {
+    const token = await AsyncStorage.getItem("userToken");
+    if (!token) {
+      return { ok: false, error: "No hay token de autenticación" };
+    }
+
+    let formData = new FormData();
+
+    // Agregar texto (siempre, aunque esté vacío, para permitir borrado)
+    formData.append("text", data.text || "");
+
+    // Agregar archivos si existen
+    if (data.files && data.files.length > 0) {
+      for (let i = 0; i < data.files.length; i++) {
+        const file = data.files[i];
+
+        // Convierte blob para web, usa URI directamente en nativo
+        if (file.uri.startsWith("http") || file.uri.startsWith("blob:")) {
+          const response = await fetch(file.uri);
+          const blob = await response.blob();
+          formData.append("file", blob, file.name);
+        } else {
+          // Para React Native
+          const fileData = {
+            uri: file.uri,
+            name: file.name,
+            type: file.type || "application/octet-stream",
+          };
+          formData.append("file", fileData as any);
+        }
+      }
+    }
+
+    const uploadResult = await fetch(
+      `${API_URL}/assign/${assignId}/save-combined`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          // NO agregar Content-Type, FormData lo maneja automáticamente
+        },
+        body: formData,
+      },
+    );
+
+    if (uploadResult.ok) {
+      const response = await uploadResult.json();
+      return response;
+    } else {
+      // Leer el cuerpo de la respuesta una sola vez
+      const responseText = await uploadResult.text();
+      console.error("Error del servidor (status:", uploadResult.status, ")");
+      console.error("Respuesta:", responseText);
+
+      try {
+        const errorResponse = JSON.parse(responseText);
+        return {
+          ok: false,
+          error: errorResponse.error || "Error al guardar entrega",
+        };
+      } catch (e) {
+        return {
+          ok: false,
+          error: `Error ${uploadResult.status}: ${responseText}`,
+        };
+      }
+    }
+  } catch (error: any) {
+    console.error("Error en saveAssignCombined:", error);
+    return {
+      ok: false,
+      error: error.message || "Error al guardar la entrega",
+    };
+  }
+}
+
 // Foros
 export async function getForumDiscussions(forumId: number) {
   const { data } = await api.get(`/forum/${forumId}/discussions`);
-  return data.discussions?.discussions ?? data.discussions ?? [];
+  console.log("getForumDiscussions - data completa:", data);
+  console.log("getForumDiscussions - data.discussions:", data.discussions);
+
+  // Moodle devuelve: { ok: true, discussions: { discussions: [...], warnings: [...] } }
+  let result = [];
+  if (data.discussions && typeof data.discussions === "object") {
+    if (Array.isArray(data.discussions.discussions)) {
+      result = data.discussions.discussions;
+    } else if (Array.isArray(data.discussions)) {
+      result = data.discussions;
+    }
+  }
+
+  console.log("getForumDiscussions - resultado final:", result);
+  return result;
 }
 
 export async function getDiscussionPosts(discussionId: number) {
   const { data } = await api.get(`/discussion/${discussionId}/posts`);
-  return data.posts?.posts ?? data.posts ?? [];
+  console.log("getDiscussionPosts - data completa:", data);
+  console.log("getDiscussionPosts - data.posts:", data.posts);
+
+  // Moodle devuelve: { ok: true, posts: { posts: [...], warnings: [...], ratinginfo: {...} } }
+  let result = [];
+  if (data.posts && typeof data.posts === "object") {
+    if (Array.isArray(data.posts.posts)) {
+      result = data.posts.posts;
+    } else if (Array.isArray(data.posts)) {
+      result = data.posts;
+    }
+  }
+
+  console.log("getDiscussionPosts - resultado final:", result);
+  return result;
 }
 
 export async function loginWithGoogle(idToken: string) {

@@ -15,7 +15,7 @@ import {
 } from "react-native";
 import {
   getAssignStatus,
-  saveAssignFile,
+  saveAssignCombined,
   saveAssignText,
 } from "../services/moodle";
 
@@ -41,16 +41,22 @@ export default function PantallaTarea() {
   const [plugins, setPlugins] = useState<any[]>([]);
   const [ultimoTexto, setUltimoTexto] = useState<string>("");
 
-  const [textoEntrega, setTextoEntrega] = useState(
-    "<p>Entrega desde la aplicacion</p>",
-  );
+  //Area de texto online para tareas
+  const [textoEntrega, setTextoEntrega] = useState("");
 
-  // Archivo
-  const [archivo, setArchivo] = useState<any>(null);
+  // Archivos
+  const [archivosNuevos, setArchivosNuevos] = useState<any[]>([]);
   const [archivosExistentes, setArchivosExistentes] = useState<any[]>([]);
+  const [maxArchivos, setMaxArchivos] = useState<number>(1);
 
   // Modal de confirmación
+  const [archivoAEliminar, setArchivoAEliminar] = useState<{
+    tipo: "nuevo" | "existente";
+    index: number;
+  } | null>(null);
   const [mostrarModalEliminar, setMostrarModalEliminar] = useState(false);
+  const [mostrarModalBorrarEntrega, setMostrarModalBorrarEntrega] =
+    useState(false);
 
   const soportaTexto = useMemo(
     () => plugins?.some((p: any) => p.type === "onlinetext"),
@@ -99,10 +105,26 @@ export default function PantallaTarea() {
             p?.find((x: any) => x.type === "onlinetext")?.editorfields?.[0]
               ?.text || "";
           setUltimoTexto(textSaved);
+          // Establecer el texto guardado en el área de edición
+          if (textSaved) {
+            setTextoEntrega(textSaved);
+          }
 
           const filePlugin = p?.find((x: any) => x.type === "file");
           const existingFiles = filePlugin?.fileareas?.[0]?.files || [];
           setArchivosExistentes(existingFiles);
+
+          // Obtener el límite de archivos permitidos
+          // maxfiles puede ser -1 (ilimitado), 0, o un número específico
+          const maxFiles = filePlugin?.fileareas?.[0]?.maxfiles;
+          // Si es -1 o undefined, usamos 20 como límite razonable, si es 0 usamos 1
+          const limite =
+            maxFiles === -1 || maxFiles === undefined
+              ? 20
+              : maxFiles === 0
+                ? 1
+                : maxFiles;
+          setMaxArchivos(limite);
 
           setEstadoEntrega(
             submission?.status === "submitted" ? "enviado" : "pendiente",
@@ -166,23 +188,66 @@ export default function PantallaTarea() {
   // Abre el selector de archivos del dispositivo
   const seleccionarArchivo = async () => {
     try {
+      const totalArchivos = archivosExistentes.length + archivosNuevos.length;
+
+      if (totalArchivos >= maxArchivos) {
+        return Alert.alert(
+          "Límite alcanzado",
+          `Esta tarea permite un máximo de ${maxArchivos} archivo(s). Elimina uno antes de agregar otro.`,
+        );
+      }
+
       const r = await DocumentPicker.getDocumentAsync({
         type: "*/*",
         copyToCacheDirectory: true,
+        multiple: false,
       });
 
-      if (!r.canceled && r.assets?.length) {
-        setArchivo(r.assets[0]);
+      if (r.canceled) {
+        return;
+      }
+
+      if (r.assets && r.assets.length > 0) {
+        const nuevoArchivo = r.assets[0];
+        const nuevaLista = [...archivosNuevos, nuevoArchivo];
+        setArchivosNuevos(nuevaLista);
+
+        Alert.alert(
+          "Archivo agregado",
+          `${nuevoArchivo.name} ha sido agregado a la lista.`,
+        );
+      } else {
+        Alert.alert("Atención", "No se pudo obtener el archivo seleccionado");
       }
     } catch (e: any) {
-      Alert.alert("Error", "No se pudo seleccionar el archivo");
+      console.error("Error al seleccionar archivo:", e);
+      Alert.alert("Error", `No se pudo seleccionar el archivo: ${e.message}`);
     }
   };
 
-  // Limpia el archivo actual de la vista para permitir subir uno nuevo
+  // Prepara la eliminación de un archivo
+  const prepararEliminacion = (tipo: "nuevo" | "existente", index: number) => {
+    setArchivoAEliminar({ tipo, index });
+    setMostrarModalEliminar(true);
+  };
+
+  // Confirma y elimina el archivo seleccionado
   const confirmarEliminacion = () => {
+    if (archivoAEliminar) {
+      if (archivoAEliminar.tipo === "nuevo") {
+        const nuevosArchivos = archivosNuevos.filter(
+          (_, i) => i !== archivoAEliminar.index,
+        );
+        setArchivosNuevos(nuevosArchivos);
+      } else {
+        const existentes = archivosExistentes.filter(
+          (_, i) => i !== archivoAEliminar.index,
+        );
+        setArchivosExistentes(existentes);
+      }
+    }
     setMostrarModalEliminar(false);
-    setArchivosExistentes([]);
+    setArchivoAEliminar(null);
   };
 
   // Sube el archivo seleccionado a Moodle
@@ -194,21 +259,99 @@ export default function PantallaTarea() {
           "No disponible",
           "Esta tarea no acepta entrega por archivo.",
         );
-      if (!archivo) return Alert.alert("Atención", "Selecciona un archivo");
+      if (archivosNuevos.length === 0)
+        return Alert.alert("Atención", "Selecciona al menos un archivo");
 
       setSubiendo(true);
 
-      const resp = await saveAssignFile(assignId, {
-        uri: archivo.uri,
-        name: archivo.name,
-        type: archivo.mimeType,
+      // Enviar todos los archivos nuevos
+      const resp = await saveAssignCombined(assignId, {
+        files: archivosNuevos.map((archivo) => ({
+          uri: archivo.uri,
+          name: archivo.name,
+          type: archivo.mimeType,
+        })),
       });
 
       if (!resp?.ok)
         throw new Error(resp?.error || "No se pudo subir el archivo");
 
-      Alert.alert("Éxito", "Archivo entregado correctamente");
-      setArchivo(null);
+      Alert.alert("Éxito", "Archivo(s) entregado(s) correctamente");
+      setArchivosNuevos([]);
+      await verificarEstado();
+    } catch (e: any) {
+      Alert.alert("Error", e.message);
+    } finally {
+      setSubiendo(false);
+    }
+  };
+
+  // Envía texto y/o archivo según lo que esté disponible
+  const enviarEntregaCombinada = async () => {
+    try {
+      if (!assignId) return Alert.alert("Error", "No se recibió el assignId");
+
+      const tieneTexto = textoEntrega && textoEntrega.trim().length > 0;
+      const tieneArchivos = archivosNuevos.length > 0;
+
+      if (!tieneTexto && !tieneArchivos) {
+        return Alert.alert(
+          "Atención",
+          "Escribe un texto o selecciona un archivo para entregar.",
+        );
+      }
+
+      setSubiendo(true);
+
+      const resp = await saveAssignCombined(assignId, {
+        text: tieneTexto ? textoEntrega : undefined,
+        files: tieneArchivos
+          ? archivosNuevos.map((archivo) => ({
+              uri: archivo.uri,
+              name: archivo.name,
+              type: archivo.mimeType,
+            }))
+          : undefined,
+      });
+
+      if (!resp?.ok)
+        throw new Error(resp?.error || "No se pudo guardar la entrega");
+
+      Alert.alert("Éxito", "Entrega guardada correctamente");
+      setArchivosNuevos([]);
+      await verificarEstado();
+    } catch (e: any) {
+      Alert.alert("Error", e.message);
+    } finally {
+      setSubiendo(false);
+    }
+  };
+
+  // Borra completamente la entrega de la tarea
+  const borrarEntrega = async () => {
+    try {
+      if (!assignId) return Alert.alert("Error", "No se recibió el assignId");
+
+      setMostrarModalBorrarEntrega(false);
+      setSubiendo(true);
+
+      // Enviar una entrega vacía para eliminar todo
+      const resp = await saveAssignCombined(assignId, {
+        text: "",
+        files: [],
+      });
+
+      if (!resp?.ok) {
+        throw new Error(resp?.error || "No se pudo borrar la entrega");
+      }
+
+      // Limpiar los estados locales
+      setTextoEntrega("");
+      setArchivosNuevos([]);
+      setArchivosExistentes([]);
+      setEstadoEntrega("pendiente");
+
+      Alert.alert("Éxito", "Entrega borrada correctamente");
       await verificarEstado();
     } catch (e: any) {
       Alert.alert("Error", e.message);
@@ -236,20 +379,25 @@ export default function PantallaTarea() {
         transparent
         visible={mostrarModalEliminar}
         animationType="fade"
-        onRequestClose={() => setMostrarModalEliminar(false)}
+        onRequestClose={() => {
+          setMostrarModalEliminar(false);
+          setArchivoAEliminar(null);
+        }}
       >
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Cambiar archivo</Text>
+            <Text style={styles.modalTitle}>Eliminar archivo</Text>
             <Text style={styles.modalMessage}>
-              Al seleccionar y entregar un nuevo archivo, este reemplazará al
-              actual.
+              ¿Estás seguro de que deseas eliminar este archivo?
             </Text>
 
             <View style={styles.modalButtons}>
               <TouchableOpacity
                 style={[styles.modalButton, styles.modalButtonCancel]}
-                onPress={() => setMostrarModalEliminar(false)}
+                onPress={() => {
+                  setMostrarModalEliminar(false);
+                  setArchivoAEliminar(null);
+                }}
               >
                 <Text style={styles.modalButtonTextCancel}>Cancelar</Text>
               </TouchableOpacity>
@@ -258,7 +406,41 @@ export default function PantallaTarea() {
                 style={[styles.modalButton, styles.modalButtonDelete]}
                 onPress={confirmarEliminacion}
               >
-                <Text style={styles.modalButtonTextDelete}>Continuar</Text>
+                <Text style={styles.modalButtonTextDelete}>Eliminar</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Modal de confirmación para borrar entrega completa */}
+      <Modal
+        transparent
+        visible={mostrarModalBorrarEntrega}
+        animationType="fade"
+        onRequestClose={() => setMostrarModalBorrarEntrega(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Borrar entrega</Text>
+            <Text style={styles.modalMessage}>
+              ¿Estás seguro de que deseas borrar toda tu entrega? Esta acción no
+              se puede deshacer.
+            </Text>
+
+            <View style={styles.modalButtons}>
+              <TouchableOpacity
+                style={[styles.modalButton, styles.modalButtonCancel]}
+                onPress={() => setMostrarModalBorrarEntrega(false)}
+              >
+                <Text style={styles.modalButtonTextCancel}>Cancelar</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.modalButton, styles.modalButtonDelete]}
+                onPress={borrarEntrega}
+              >
+                <Text style={styles.modalButtonTextDelete}>Borrar</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -267,13 +449,6 @@ export default function PantallaTarea() {
 
       <View style={styles.card}>
         <Text style={styles.titulo}>{nombre}</Text>
-
-        <Text style={{ color: "#666", marginTop: 6 }}>
-          Último texto guardado:{" "}
-          {ultimoTexto
-            ? `"${stripHtml(ultimoTexto).slice(0, 60)}..."`
-            : "(vacío)"}
-        </Text>
 
         <Text style={{ color: "#666", marginTop: 6 }}>
           Tipo de entrega:{" "}
@@ -296,12 +471,21 @@ export default function PantallaTarea() {
               Tu entrega ya quedó registrada en Moodle.
             </Text>
 
-            <TouchableOpacity
-              style={styles.botonReenviar}
-              onPress={() => setEstadoEntrega("pendiente")}
-            >
-              <Text style={styles.textoBotonReenviar}>Editar / reenviar</Text>
-            </TouchableOpacity>
+            <View style={styles.botonesEntrega}>
+              <TouchableOpacity
+                style={styles.botonEditar}
+                onPress={() => setEstadoEntrega("pendiente")}
+              >
+                <Text style={styles.textoBotonEditar}>Editar entrega</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.botonBorrar}
+                onPress={() => setMostrarModalBorrarEntrega(true)}
+              >
+                <Text style={styles.textoBotonBorrar}>Borrar entrega</Text>
+              </TouchableOpacity>
+            </View>
           </View>
         ) : (
           <>
@@ -318,38 +502,56 @@ export default function PantallaTarea() {
                   placeholder="Escribe aquí tu entrega..."
                 />
 
-                <TouchableOpacity
-                  style={[
-                    styles.botonEnviar,
-                    subiendo && styles.botonDesactivado,
-                  ]}
-                  onPress={enviarTexto}
-                  disabled={subiendo}
-                >
-                  {subiendo ? (
-                    <ActivityIndicator color="white" />
-                  ) : (
-                    <Text style={styles.textoBoton}>Guardar texto</Text>
-                  )}
-                </TouchableOpacity>
+                {/* Botón solo para texto cuando NO hay soporte de archivo */}
+                {!soportaArchivo && (
+                  <TouchableOpacity
+                    style={[
+                      styles.botonEnviar,
+                      subiendo && styles.botonDesactivado,
+                    ]}
+                    onPress={enviarTexto}
+                    disabled={subiendo}
+                  >
+                    {subiendo ? (
+                      <ActivityIndicator color="white" />
+                    ) : (
+                      <Text style={styles.textoBoton}>Guardar texto</Text>
+                    )}
+                  </TouchableOpacity>
+                )}
               </>
             )}
 
             {/* ====== ARCHIVO ====== */}
             {soportaArchivo && (
-              <View style={{ marginTop: 22 }}>
+              <View style={{ marginTop: soportaTexto ? 22 : 0 }}>
                 <Text style={styles.label}>Entrega por archivo:</Text>
+                {maxArchivos > 0 && (
+                  <Text
+                    style={{
+                      fontSize: 10,
+                      color: "#999",
+                      marginTop: 2,
+                      marginBottom: 8,
+                    }}
+                  >
+                    {maxArchivos >= 20
+                      ? "Puedes subir múltiples archivos"
+                      : `Máximo ${maxArchivos} archivo${maxArchivos > 1 ? "s" : ""}`}
+                  </Text>
+                )}
 
+                {/* Archivos existentes en Moodle */}
                 {archivosExistentes.length > 0 && (
                   <View style={{ marginBottom: 12 }}>
                     <Text
                       style={{ fontSize: 12, color: "#666", marginBottom: 6 }}
                     >
-                      Archivo actual:
+                      Archivos guardados:
                     </Text>
                     {archivosExistentes.map((file, index) => (
                       <View
-                        key={index}
+                        key={`existente-${index}`}
                         style={[
                           styles.fileCard,
                           { backgroundColor: "#e7f5ff" },
@@ -359,7 +561,9 @@ export default function PantallaTarea() {
                           {file.filename}
                         </Text>
                         <TouchableOpacity
-                          onPress={() => setMostrarModalEliminar(true)}
+                          onPress={() =>
+                            prepararEliminacion("existente", index)
+                          }
                         >
                           <Text
                             style={[styles.removeText, { color: "#d63031" }]}
@@ -369,46 +573,82 @@ export default function PantallaTarea() {
                         </TouchableOpacity>
                       </View>
                     ))}
-                    <Text style={{ fontSize: 11, color: "#999", marginTop: 4 }}>
-                      Para reemplazar, selecciona un nuevo archivo
-                    </Text>
                   </View>
                 )}
 
-                {archivo ? (
-                  <View style={styles.fileCard}>
-                    <Text style={styles.fileName} numberOfLines={1}>
-                      {archivo.name}
+                {/* Archivos nuevos seleccionados */}
+                {archivosNuevos.length > 0 ? (
+                  <View style={{ marginBottom: 12 }}>
+                    <Text
+                      style={{ fontSize: 12, color: "#666", marginBottom: 6 }}
+                    >
+                      Archivos nuevos ({archivosNuevos.length}):
                     </Text>
-                    <TouchableOpacity onPress={() => setArchivo(null)}>
-                      <Text style={styles.removeText}>✕</Text>
-                    </TouchableOpacity>
+                    {archivosNuevos.map((archivo, index) => (
+                      <View key={`nuevo-${index}`} style={styles.fileCard}>
+                        <Text style={styles.fileName} numberOfLines={1}>
+                          {archivo.name}
+                        </Text>
+                        <TouchableOpacity
+                          onPress={() => prepararEliminacion("nuevo", index)}
+                        >
+                          <Text style={styles.removeText}>✕</Text>
+                        </TouchableOpacity>
+                      </View>
+                    ))}
                   </View>
-                ) : (
+                ) : null}
+
+                {/* Botón para seleccionar archivo */}
+                <TouchableOpacity
+                  style={styles.uploadButton}
+                  onPress={seleccionarArchivo}
+                >
+                  <Text style={styles.uploadText}>
+                    {archivosNuevos.length > 0
+                      ? "Agregar otro archivo"
+                      : "Seleccionar archivo"}
+                  </Text>
+                </TouchableOpacity>
+
+                {/* Botón solo para archivo cuando NO hay soporte de texto */}
+                {!soportaTexto && (
                   <TouchableOpacity
-                    style={styles.uploadButton}
-                    onPress={seleccionarArchivo}
+                    style={[
+                      styles.botonEnviar,
+                      { backgroundColor: "#0056b3" },
+                      subiendo && styles.botonDesactivado,
+                    ]}
+                    onPress={enviarArchivo}
+                    disabled={subiendo}
                   >
-                    <Text style={styles.uploadText}>Seleccionar archivo</Text>
+                    {subiendo ? (
+                      <ActivityIndicator color="white" />
+                    ) : (
+                      <Text style={styles.textoBoton}>Entregar</Text>
+                    )}
                   </TouchableOpacity>
                 )}
-
-                <TouchableOpacity
-                  style={[
-                    styles.botonEnviar,
-                    { backgroundColor: "#0056b3" },
-                    subiendo && styles.botonDesactivado,
-                  ]}
-                  onPress={enviarArchivo}
-                  disabled={subiendo}
-                >
-                  {subiendo ? (
-                    <ActivityIndicator color="white" />
-                  ) : (
-                    <Text style={styles.textoBoton}>Entregar</Text>
-                  )}
-                </TouchableOpacity>
               </View>
+            )}
+
+            {/* ====== BOTÓN COMBINADO cuando soporta TEXTO Y ARCHIVO ====== */}
+            {soportaTexto && soportaArchivo && (
+              <TouchableOpacity
+                style={[
+                  styles.botonEnviar,
+                  { backgroundColor: "#0056b3", marginTop: 25 },
+                  subiendo && styles.botonDesactivado,
+                ]}
+                onPress={enviarEntregaCombinada}
+                disabled={subiendo}
+              >
+                {subiendo ? (
+                  <ActivityIndicator color="white" />
+                ) : (
+                  <Text style={styles.textoBoton}>Guardar entrega</Text>
+                )}
+              </TouchableOpacity>
             )}
 
             {!soportaTexto && !soportaArchivo && (
@@ -418,7 +658,11 @@ export default function PantallaTarea() {
             )}
 
             <Text style={{ marginTop: 10, fontSize: 12, color: "#666" }}>
-              Nota: Presiona entregar una vez cargado el archivo.
+              {soportaTexto && soportaArchivo
+                ? `Nota: Puedes entregar texto, archivo${maxArchivos > 1 ? "s" : ""} o ambos.`
+                : maxArchivos > 1
+                  ? `Nota: Puedes subir hasta ${maxArchivos} archivos.`
+                  : "Nota: Presiona entregar una vez cargado el archivo."}
             </Text>
           </>
         )}
@@ -522,6 +766,42 @@ const styles = StyleSheet.create({
     borderColor: "#ffc107",
   },
   textoBotonReenviar: { color: "#856404", fontWeight: "bold" },
+
+  // Estilos para los botones de editar y borrar entrega
+  botonesEntrega: {
+    flexDirection: "row",
+    gap: 10,
+    marginTop: 15,
+    width: "100%",
+  },
+  botonEditar: {
+    flex: 1,
+    padding: 12,
+    backgroundColor: "#fff3cd",
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: "#ffc107",
+    alignItems: "center",
+  },
+  textoBotonEditar: {
+    color: "#856404",
+    fontWeight: "bold",
+    fontSize: 14,
+  },
+  botonBorrar: {
+    flex: 1,
+    padding: 12,
+    backgroundColor: "#f8d7da",
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: "#f5c6cb",
+    alignItems: "center",
+  },
+  textoBotonBorrar: {
+    color: "#721c24",
+    fontWeight: "bold",
+    fontSize: 14,
+  },
 
   // Modal styles
   modalOverlay: {

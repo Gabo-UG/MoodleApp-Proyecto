@@ -43,7 +43,14 @@ export default function Posts() {
     setLoading(true);
     try {
       const p = await getDiscussionPosts(discussionId);
+      console.log("Posts recibidos:", p);
+      console.log("Número de posts:", p.length);
+      if (p.length > 0) {
+        console.log("Primer post:", JSON.stringify(p[0], null, 2));
+      }
       setPosts(p);
+    } catch (error) {
+      console.error("Error cargando posts:", error);
     } finally {
       setLoading(false);
     }
@@ -61,6 +68,10 @@ export default function Posts() {
 
     const parentPostId = posts[posts.length - 1].id;
 
+    console.log("Respondiendo a post ID:", parentPostId);
+    console.log("Subject:", `Re: ${subject}`);
+    console.log("Message:", message);
+
     try {
       setSending(true);
       const resp = await replyToPost(
@@ -68,11 +79,13 @@ export default function Posts() {
         `Re: ${subject}`,
         `<p>${message}</p>`,
       );
+      console.log("Respuesta del servidor:", resp);
       if (!resp.ok) throw new Error(resp.error || "No se pudo responder");
       setMessage("");
       await load();
       Alert.alert("Listo", "Respuesta enviada");
     } catch (e: any) {
+      console.error("Error al responder:", e);
       Alert.alert("Error", e.message);
     } finally {
       setSending(false);
@@ -97,11 +110,19 @@ export default function Posts() {
             <View style={styles.card}>
               <Text style={styles.subject}>{item.subject}</Text>
               <Text style={styles.meta}>
-                {item.author?.fullname} • {formatDate(item.timecreated)}
+                {item.author?.fullname || item.userfullname} •{" "}
+                {formatDate(item.created || item.timecreated)}
               </Text>
               <Text style={styles.body}>{cleanHtml(item.message)}</Text>
             </View>
           )}
+          ListEmptyComponent={
+            <View style={{ padding: 20, alignItems: "center" }}>
+              <Text style={{ color: "#888", textAlign: "center" }}>
+                No hay posts en esta discusión
+              </Text>
+            </View>
+          }
         />
       )}
 
